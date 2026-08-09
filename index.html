@@ -4320,8 +4320,9 @@ async function renderStream(url) {
     
     const root = document.getElementById('playerRoot');
     
-    // Since we provide playback_data directly in the mock, we need to modify WatchPlayer to accept it if API fetch is bypassed, or we can just mock the API fetch.
-    // Actually, WatchPlayer automatically fetches from `/api/videos/${video.id}/playback`. We need it to NOT do that for custom streams.
+    // Initialize the player directly with the mock video data (which contains playback_data)
+    // This will bypass the API fetch and directly play the URL.
+    new WatchPlayer(root, mockVideo, API_URL);
 }
 
 async function renderWatch(id) {
