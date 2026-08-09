@@ -1442,6 +1442,1624 @@ h1, h2, h3, h4, h5, h6, .serif {
     <!-- Status Toast -->
     <div id="toast" class="toast hidden"></div>
 
-    <script src="app.js" type="module"></script>
+    <script>const formatTime = (seconds) => {
+    if (isNaN(seconds)) return '00:00';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+};
+
+class WatchPlayer {
+    constructor(container, videoData, apiUrl) {
+        this.container = container;
+        this.videoData = videoData;
+        this.apiUrl = apiUrl;
+        this.hlsUrl = `${apiUrl}/videos/${videoData.id}/playback`;
+        
+        this.hls = null;
+        this.state = {
+            playing: false,
+            volume: parseFloat(localStorage.getItem('watch_volume') || '1'),
+            muted: localStorage.getItem('watch_muted') === 'true',
+            theaterMode: localStorage.getItem('watch_theater') === 'true',
+            playbackRate: parseFloat(localStorage.getItem('watch_speed') || '1'),
+            controlsVisible: true,
+            controlsTimeout: null,
+            audioTracks: [],
+            selectedAudioTrack: -1,
+            subtitleTracks: [],
+            selectedSubtitleTrack: -1,
+            subtitlesEnabled: localStorage.getItem('watch_subtitles') === 'true',
+            objectFit: localStorage.getItem('watch_objectFit') || 'contain',
+            duration: videoData.duration || 0,
+            currentTime: 0,
+            isSeeking: false,
+            isBuffering: false,
+            activeMenu: null
+        };
+        
+        window.playerInstance = this;
+        
+        this.initDOM();
+        this.bindElements();
+        
+        if (this.videoData.playback_data) {
+            this.playbackData = this.videoData.playback_data;
+            this.initPlayer();
+        } else {
+            this.initPlayer();
+        }
+        
+        this.attachEvents();
+        this.checkResume();
+    }
+    
+    initDOM() {
+        // Construct the player HTML
+        this.container.innerHTML = `
+            <div class="watch-player-wrapper ${this.state.theaterMode ? 'theater-mode' : ''}" id="playerWrapper">
+                <video id="videoElement" playsinline preload="metadata" crossorigin="anonymous" 
+                    poster="${this.videoData.backdrop || this.videoData.thumbnail || ''}"></video>
+                
+                <div class="player-overlay" id="playerOverlay">
+                    <div class="player-top-bar">
+                        <button class="player-icon-btn" id="playerBackBtn" aria-label="Back" title="Back">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                        </button>
+                        <div class="player-title serif">${this.videoData.title}</div>
+                    </div>
+                    
+                    <div class="player-center-action" id="centerPlayBtn">
+                        <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                    </div>
+                    
+                    <div class="player-loading hidden" id="playerLoading">
+                        <div class="spinner"></div>
+                    </div>
+
+                    <div class="player-bottom-bar" id="bottomBar">
+                        <div class="player-progress-container" id="progressContainer">
+                            <div class="player-progress-bar">
+                                <div class="player-progress-loaded" id="progressLoaded"></div>
+                                <div class="player-progress-played" id="progressPlayed"></div>
+                                <div class="player-progress-scrubber" id="progressScrubber"></div>
+                            </div>
+                            <div class="player-progress-tooltip hidden" id="progressTooltip">00:00</div>
+                        </div>
+                        
+                        <div class="player-controls">
+                            <div class="player-controls-left">
+                                <button class="player-icon-btn" id="playPauseBtn" aria-label="Play/Pause">
+                                    <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                    <svg class="pause-icon hidden" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                </button>
+                                <div class="player-time" id="timeDisplay">00:00 / 00:00</div>
+                                
+                                <div class="player-volume-group">
+                                    <button class="player-icon-btn" id="muteBtn" aria-label="Mute/Unmute">
+                                        <svg class="vol-high" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                                        <svg class="vol-muted hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+                                    </button>
+                                    <input type="range" class="player-volume-slider" id="volumeSlider" min="0" max="1" step="0.05" value="${this.state.volume}">
+                                </div>
+                            </div>
+                            
+                            <div class="player-controls-right">
+                                <button class="player-text-btn hidden" id="audioBtn" aria-label="Audio Tracks">AUDIO</button>
+                                <button class="player-text-btn hidden" id="captionBtn" aria-label="Captions">CC</button>
+                                <button class="player-icon-btn" id="settingsBtn" aria-label="Settings" title="Settings">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                                </button>
+                                <button class="player-icon-btn pip-support-only" id="pipBtn" aria-label="Picture in Picture" title="Picture in Picture">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><rect x="12" y="12" width="7" height="5" rx="1" ry="1"></rect></svg>
+                                </button>
+                                <button class="player-icon-btn desktop-only" id="theaterBtn" aria-label="Theater Mode" title="Theater Mode">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                                </button>
+                                <button class="player-icon-btn" id="fullscreenBtn" aria-label="Fullscreen" title="Fullscreen">
+                                    <svg class="fs-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                                    <svg class="fs-exit hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Menus -->
+                    <div class="player-menu fade-in hidden" id="playerMenu">
+                        <div class="player-menu-header">
+                            <button id="menuBackBtn" class="hidden"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></button>
+                            <span id="menuTitle">Settings</span>
+                            <button id="menuCloseBtn"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+                        </div>
+                        <div class="player-menu-content" id="menuContent"></div>
+                    </div>
+                    
+                    <!-- Resume Prompt -->
+                    <div class="resume-prompt fade-in hidden" id="resumePrompt">
+                        <div class="resume-header serif">Continue watching</div>
+                        <div class="resume-meta" id="resumeMeta"></div>
+                        <div class="resume-actions">
+                            <button class="resume-btn primary" id="resumeBtn">Resume</button>
+                            <button class="resume-btn" id="startOverBtn">Start Over</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Double tap overlay indicator -->
+                    <div class="seek-indicator hidden" id="seekIndicator"></div>
+                </div>
+            </div>
+        `;
+    }
+    
+    bindElements() {
+        this.els = {
+            wrapper: document.getElementById('playerWrapper'),
+            video: document.getElementById('videoElement'),
+            overlay: document.getElementById('playerOverlay'),
+            playPauseBtn: document.getElementById('playPauseBtn'),
+            playIcon: document.querySelector('#playPauseBtn .play-icon'),
+            pauseIcon: document.querySelector('#playPauseBtn .pause-icon'),
+            centerPlayBtn: document.getElementById('centerPlayBtn'),
+            timeDisplay: document.getElementById('timeDisplay'),
+            progressContainer: document.getElementById('progressContainer'),
+            progressPlayed: document.getElementById('progressPlayed'),
+            progressLoaded: document.getElementById('progressLoaded'),
+            progressScrubber: document.getElementById('progressScrubber'),
+            progressTooltip: document.getElementById('progressTooltip'),
+            muteBtn: document.getElementById('muteBtn'),
+            volHigh: document.querySelector('.vol-high'),
+            volMuted: document.querySelector('.vol-muted'),
+            volumeSlider: document.getElementById('volumeSlider'),
+            audioBtn: document.getElementById('audioBtn'),
+            captionBtn: document.getElementById('captionBtn'),
+            settingsBtn: document.getElementById('settingsBtn'),
+            theaterBtn: document.getElementById('theaterBtn'),
+            fullscreenBtn: document.getElementById('fullscreenBtn'),
+            fsEnter: document.querySelector('.fs-enter'),
+            fsExit: document.querySelector('.fs-exit'),
+            pipBtn: document.getElementById('pipBtn'),
+            menu: document.getElementById('playerMenu'),
+            menuContent: document.getElementById('menuContent'),
+            menuTitle: document.getElementById('menuTitle'),
+            menuBackBtn: document.getElementById('menuBackBtn'),
+            menuCloseBtn: document.getElementById('menuCloseBtn'),
+            loading: document.getElementById('playerLoading'),
+            resumePrompt: document.getElementById('resumePrompt'),
+            resumeMeta: document.getElementById('resumeMeta'),
+            resumeBtn: document.getElementById('resumeBtn'),
+            startOverBtn: document.getElementById('startOverBtn'),
+            seekIndicator: document.getElementById('seekIndicator'),
+            backBtn: document.getElementById('playerBackBtn')
+        };
+        
+        // Apply object fit
+        this.els.video.style.objectFit = this.state.objectFit;
+        
+        // Hide PIP if not supported
+        if (!document.pictureInPictureEnabled) {
+            this.els.pipBtn.style.display = 'none';
+        }
+        
+        // Mobile hides theater
+        if (window.innerWidth < 768) {
+            this.els.theaterBtn.style.display = 'none';
+        }
+    }
+    
+    async initPlayer() {
+        if (!this.playbackData) {
+            try {
+                const response = await fetch(`${this.apiUrl}/videos/${this.videoData.id}/playback`);
+                if (!response.ok) throw new Error('Playback info not available');
+                this.playbackData = await response.json();
+            } catch (e) {
+                console.error(e);
+                return;
+            }
+        }
+
+        let sourceUrl = this.playbackData.source.url;
+        if (!sourceUrl.startsWith('http')) {
+            sourceUrl = this.apiUrl.replace('/api', '') + sourceUrl;
+        }
+
+        // Add subtitle tracks to video element manually (WebVTT)
+        if (this.playbackData.subtitle_tracks && this.playbackData.subtitle_tracks.length > 0) {
+            this.state.subtitleTracks = this.playbackData.subtitle_tracks.map(t => ({
+                id: t.id,
+                name: t.label,
+                language: t.language,
+                url: t.url.startsWith('http') ? t.url : this.apiUrl.replace('/api', '') + t.url,
+                default: t.default
+            }));
+            
+            this.state.subtitleTracks.forEach((t, i) => {
+                const track = document.createElement('track');
+                track.kind = 'subtitles';
+                track.label = t.name;
+                track.srclang = t.language || 'en';
+                track.src = t.url;
+                if (t.default || (this.state.subtitlesEnabled && this.state.selectedSubtitleTrack === -1 && i === 0)) {
+                    track.default = true;
+                    this.state.selectedSubtitleTrack = t.id;
+                }
+                this.els.video.appendChild(track);
+            });
+            this.els.captionBtn.classList.remove('hidden');
+        }
+
+        // Apply initial states
+        this.els.video.volume = this.state.volume;
+        this.els.video.muted = this.state.muted;
+        this.els.video.playbackRate = this.state.playbackRate;
+        this.updateVolumeUI();
+        
+        if (this.playbackData.mode === 'hls' && typeof Hls !== 'undefined' && Hls.isSupported()) {
+            this.hls = new Hls({
+                autoStartLoad: true,
+                startPosition: -1,
+                capLevelToPlayerSize: true,
+            });
+            
+            this.hls.loadSource(sourceUrl);
+            this.hls.attachMedia(this.els.video);
+            
+            // Pre-populate audio tracks from backend metadata to guarantee they show up
+            if (this.playbackData.audio_tracks && this.playbackData.audio_tracks.length > 1) {
+                this.state.audioTracks = this.playbackData.audio_tracks.map((t, index) => ({
+                    id: index,
+                    name: t.label || t.language || `Track ${index+1}`
+                }));
+                this.els.audioBtn.classList.remove('hidden');
+                this.state.selectedAudioTrack = 0;
+            }
+
+            this.hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                // If hls.js parsed its own tracks, we can optionally sync with them
+                if (this.hls.audioTracks && this.hls.audioTracks.length > 1) {
+                    this.state.audioTracks = this.hls.audioTracks;
+                    this.els.audioBtn.classList.remove('hidden');
+                }
+                this.state.selectedAudioTrack = this.hls.audioTrack;
+            });
+            
+            this.hls.on(Hls.Events.AUDIO_TRACK_LOADED, (event, data) => {
+                this.state.selectedAudioTrack = data.id;
+            });
+            
+            this.hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (event, data) => {
+                this.state.selectedAudioTrack = data.id;
+            });
+            
+            this.hls.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            this.hls.startLoad();
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            this.hls.recoverMediaError();
+                            break;
+                        default:
+                            this.hls.destroy();
+                            break;
+                    }
+                }
+            });
+        } else if (this.els.video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Direct mp4 or Native Safari HLS
+            this.els.video.src = sourceUrl;
+            
+            // Audio tracks natively supported by Safari via video.audioTracks
+            if (this.playbackData.audio_tracks && this.playbackData.audio_tracks.length > 1) {
+                this.state.audioTracks = this.playbackData.audio_tracks.map((t, index) => ({
+                    id: index, // Safari native tracks are 0-indexed
+                    name: t.label || t.language || `Track ${index+1}`
+                }));
+                this.els.audioBtn.classList.remove('hidden');
+                this.state.selectedAudioTrack = 0;
+                
+                this.els.video.addEventListener('loadedmetadata', () => {
+                    if (this.els.video.audioTracks) {
+                        for (let i = 0; i < this.els.video.audioTracks.length; i++) {
+                            if (this.els.video.audioTracks[i].enabled) {
+                                this.state.selectedAudioTrack = i;
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+    
+    attachEvents() {
+        const { video, wrapper, overlay, progressContainer, volumeSlider } = this.els;
+        
+        // Video Events
+        video.addEventListener('play', () => {
+            this.state.playing = true;
+            this.els.playIcon.classList.add('hidden');
+            this.els.pauseIcon.classList.remove('hidden');
+            this.els.centerPlayBtn.classList.add('hidden');
+            this.els.resumePrompt.classList.add('hidden');
+            this.startControlsHideTimer();
+        });
+        
+        video.addEventListener('pause', () => {
+            this.state.playing = false;
+            this.els.playIcon.classList.remove('hidden');
+            this.els.pauseIcon.classList.add('hidden');
+            this.els.centerPlayBtn.classList.remove('hidden');
+            this.showControls();
+            clearTimeout(this.state.controlsTimeout);
+        });
+        
+        video.addEventListener('timeupdate', () => {
+            if (!this.state.isSeeking) {
+                this.updateProgress();
+            }
+            this.saveProgress();
+        });
+        
+        video.addEventListener('durationchange', () => {
+            this.state.duration = video.duration;
+            this.updateProgress();
+        });
+        
+        video.addEventListener('progress', () => {
+            if (video.buffered.length > 0) {
+                const loaded = video.buffered.end(video.buffered.length - 1);
+                const percent = (loaded / this.state.duration) * 100;
+                this.els.progressLoaded.style.width = `${percent}%`;
+            }
+        });
+        
+        video.addEventListener('waiting', () => {
+            this.state.isBuffering = true;
+            this.els.loading.classList.remove('hidden');
+        });
+        
+        video.addEventListener('playing', () => {
+            this.state.isBuffering = false;
+            this.els.loading.classList.add('hidden');
+        });
+
+        // Overlay Interactions (Desktop vs Mobile)
+        overlay.addEventListener('mousemove', () => {
+            this.showControls();
+            if (this.state.playing) this.startControlsHideTimer();
+        });
+        
+        overlay.addEventListener('mouseleave', () => {
+            if (this.state.playing && !this.state.activeMenu) {
+                this.hideControls();
+            }
+        });
+        
+        overlay.addEventListener('click', (e) => {
+            // If clicking directly on the overlay (the video area), toggle play/pause
+            if (e.target === overlay || e.target === this.els.centerPlayBtn) {
+                if (window.innerWidth < 768) {
+                    // Mobile behavior: first tap shows controls, second taps inside play/pause
+                    if (!this.state.controlsVisible) {
+                        this.showControls();
+                        this.startControlsHideTimer();
+                    } else {
+                        this.togglePlay();
+                    }
+                } else {
+                    // Desktop behavior: always toggle
+                    this.togglePlay();
+                }
+            }
+        });
+
+        // Double tap to seek (mobile)
+        let lastTap = 0;
+        overlay.addEventListener('touchstart', (e) => {
+            if (e.target !== overlay) return;
+            const now = Date.now();
+            if (now - lastTap < 300) {
+                const x = e.changedTouches[0].clientX;
+                const width = window.innerWidth;
+                if (x < width / 2) {
+                    this.seekRelative(-10);
+                    this.showSeekIndicator('backward');
+                } else {
+                    this.seekRelative(10);
+                    this.showSeekIndicator('forward');
+                }
+            }
+            lastTap = now;
+        }, { passive: true });
+
+        // Controls
+        this.els.playPauseBtn.addEventListener('click', () => this.togglePlay());
+        this.els.muteBtn.addEventListener('click', () => this.toggleMute());
+        
+        volumeSlider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            video.volume = val;
+            video.muted = val === 0;
+            this.state.volume = val;
+            this.state.muted = val === 0;
+            this.updateVolumeUI();
+            localStorage.setItem('watch_volume', val.toString());
+            localStorage.setItem('watch_muted', this.state.muted.toString());
+        });
+        
+        this.els.fullscreenBtn.addEventListener('click', () => this.toggleFullscreen());
+        this.els.theaterBtn.addEventListener('click', () => this.toggleTheater());
+        this.els.pipBtn.addEventListener('click', async () => {
+            if (document.pictureInPictureElement) {
+                await document.exitPictureInPicture();
+            } else {
+                await video.requestPictureInPicture();
+            }
+        });
+        
+        this.els.backBtn.addEventListener('click', () => {
+            window.history.back();
+        });
+
+        // Progress Bar
+        const updateSeek = (e) => {
+            const rect = progressContainer.getBoundingClientRect();
+            let pos = (e.clientX - rect.left) / rect.width;
+            pos = Math.max(0, Math.min(1, pos));
+            const newTime = pos * this.state.duration;
+            this.els.progressPlayed.style.width = `${pos * 100}%`;
+            this.els.progressScrubber.style.left = `${pos * 100}%`;
+            this.els.timeDisplay.textContent = `${formatTime(newTime)} / ${formatTime(this.state.duration)}`;
+            return newTime;
+        };
+
+        progressContainer.addEventListener('mousedown', (e) => {
+            this.state.isSeeking = true;
+            updateSeek(e);
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (this.state.isSeeking) {
+                updateSeek(e);
+            }
+        });
+
+        document.addEventListener('mouseup', (e) => {
+            if (this.state.isSeeking) {
+                this.state.isSeeking = false;
+                video.currentTime = updateSeek(e);
+            }
+        });
+
+        progressContainer.addEventListener('mousemove', (e) => {
+            const rect = progressContainer.getBoundingClientRect();
+            let pos = (e.clientX - rect.left) / rect.width;
+            pos = Math.max(0, Math.min(1, pos));
+            const time = pos * this.state.duration;
+            this.els.progressTooltip.textContent = formatTime(time);
+            this.els.progressTooltip.style.left = `${pos * 100}%`;
+            this.els.progressTooltip.classList.remove('hidden');
+        });
+
+        progressContainer.addEventListener('mouseleave', () => {
+            this.els.progressTooltip.classList.add('hidden');
+        });
+        
+        // Touch seeking
+        progressContainer.addEventListener('touchstart', (e) => {
+            this.state.isSeeking = true;
+            updateSeek(e.touches[0]);
+        }, { passive: true });
+        
+        progressContainer.addEventListener('touchmove', (e) => {
+            if (this.state.isSeeking) updateSeek(e.touches[0]);
+        }, { passive: true });
+        
+        progressContainer.addEventListener('touchend', (e) => {
+            if (this.state.isSeeking) {
+                this.state.isSeeking = false;
+                video.currentTime = updateSeek(e.changedTouches[0]);
+            }
+        });
+
+        // Menus
+        this.els.settingsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.openMenu('settings');
+        });
+        
+        this.els.audioBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.openMenu('audio');
+        });
+        
+        this.els.captionBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.openMenu('captions');
+        });
+        
+        this.els.menuCloseBtn.addEventListener('click', () => this.closeMenu());
+        this.els.menuBackBtn.addEventListener('click', () => this.openMenu('settings'));
+        
+        // Keyboard
+        this.handleKeydown = this.handleKeydown.bind(this);
+        document.addEventListener('keydown', this.handleKeydown);
+        
+        // Fullscreen changes
+        document.addEventListener('fullscreenchange', () => {
+            if (document.fullscreenElement) {
+                this.els.fsEnter.classList.add('hidden');
+                this.els.fsExit.classList.remove('hidden');
+                wrapper.classList.add('is-fullscreen');
+            } else {
+                this.els.fsEnter.classList.remove('hidden');
+                this.els.fsExit.classList.add('hidden');
+                wrapper.classList.remove('is-fullscreen');
+            }
+        });
+        
+        // Media Session API
+        if ('mediaSession' in navigator) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: this.videoData.title,
+                artist: 'Watch Archive',
+                artwork: [
+                    { src: this.videoData.poster || this.videoData.thumbnail, sizes: '500x750', type: 'image/jpeg' }
+                ]
+            });
+            navigator.mediaSession.setActionHandler('play', () => this.els.video.play());
+            navigator.mediaSession.setActionHandler('pause', () => this.els.video.pause());
+            navigator.mediaSession.setActionHandler('seekbackward', () => this.seekRelative(-10));
+            navigator.mediaSession.setActionHandler('seekforward', () => this.seekRelative(10));
+        }
+    }
+    
+    handleKeydown(e) {
+        if (e.target.tagName.toLowerCase() === 'input') return;
+        
+        switch(e.key.toLowerCase()) {
+            case ' ':
+            case 'k':
+                e.preventDefault();
+                this.togglePlay();
+                this.showControls();
+                if(this.state.playing) this.startControlsHideTimer();
+                break;
+            case 'arrowright':
+                e.preventDefault();
+                this.seekRelative(10);
+                this.showControls();
+                break;
+            case 'arrowleft':
+                e.preventDefault();
+                this.seekRelative(-10);
+                this.showControls();
+                break;
+            case 'arrowup':
+                e.preventDefault();
+                this.els.video.volume = Math.min(1, this.els.video.volume + 0.1);
+                this.updateVolumeStateFromVideo();
+                this.showControls();
+                break;
+            case 'arrowdown':
+                e.preventDefault();
+                this.els.video.volume = Math.max(0, this.els.video.volume - 0.1);
+                this.updateVolumeStateFromVideo();
+                this.showControls();
+                break;
+            case 'm':
+                e.preventDefault();
+                this.toggleMute();
+                this.showControls();
+                break;
+            case 'f':
+                e.preventDefault();
+                this.toggleFullscreen();
+                break;
+            case 'c':
+                e.preventDefault();
+                this.toggleCaptions();
+                break;
+            case 'escape':
+                if (this.state.activeMenu) this.closeMenu();
+                break;
+        }
+    }
+
+    updateVolumeStateFromVideo() {
+        this.state.volume = this.els.video.volume;
+        this.state.muted = this.els.video.muted || this.state.volume === 0;
+        this.els.volumeSlider.value = this.state.volume;
+        this.updateVolumeUI();
+        localStorage.setItem('watch_volume', this.state.volume.toString());
+        localStorage.setItem('watch_muted', this.state.muted.toString());
+    }
+    
+    togglePlay() {
+        if (this.els.video.paused) {
+            this.els.video.play();
+        } else {
+            this.els.video.pause();
+        }
+    }
+    
+    toggleMute() {
+        this.els.video.muted = !this.els.video.muted;
+        this.state.muted = this.els.video.muted;
+        if (!this.state.muted && this.state.volume === 0) {
+            this.els.video.volume = 0.5;
+            this.state.volume = 0.5;
+            this.els.volumeSlider.value = 0.5;
+        }
+        this.updateVolumeUI();
+        localStorage.setItem('watch_muted', this.state.muted.toString());
+        localStorage.setItem('watch_volume', this.state.volume.toString());
+    }
+    
+    updateVolumeUI() {
+        if (this.state.muted || this.state.volume === 0) {
+            this.els.volHigh.classList.add('hidden');
+            this.els.volMuted.classList.remove('hidden');
+        } else {
+            this.els.volHigh.classList.remove('hidden');
+            this.els.volMuted.classList.add('hidden');
+        }
+    }
+    
+    seekRelative(seconds) {
+        this.els.video.currentTime = Math.max(0, Math.min(this.state.duration, this.els.video.currentTime + seconds));
+    }
+    
+    showSeekIndicator(direction) {
+        this.els.seekIndicator.textContent = direction === 'forward' ? '10 ↷' : '↶ 10';
+        this.els.seekIndicator.classList.remove('hidden');
+        this.els.seekIndicator.style.animation = 'none';
+        this.els.seekIndicator.offsetHeight; // trigger reflow
+        this.els.seekIndicator.style.animation = 'popFade 0.6s ease forwards';
+    }
+    
+    toggleFullscreen() {
+        if (!document.fullscreenElement) {
+            this.els.wrapper.requestFullscreen().catch(err => {
+                console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+            });
+        } else {
+            document.exitFullscreen();
+        }
+    }
+    
+    toggleTheater() {
+        this.state.theaterMode = !this.state.theaterMode;
+        if (this.state.theaterMode) {
+            this.els.wrapper.classList.add('theater-mode');
+        } else {
+            this.els.wrapper.classList.remove('theater-mode');
+        }
+        localStorage.setItem('watch_theater', this.state.theaterMode.toString());
+    }
+    
+    updateProgress() {
+        const current = this.els.video.currentTime;
+        const dur = this.state.duration || this.els.video.duration || 0;
+        if (dur === 0) return;
+        
+        const percent = (current / dur) * 100;
+        this.els.progressPlayed.style.width = `${percent}%`;
+        this.els.progressScrubber.style.left = `${percent}%`;
+        
+        this.els.timeDisplay.textContent = `${formatTime(current)} / ${formatTime(dur)}`;
+    }
+    
+    showControls() {
+        this.state.controlsVisible = true;
+        this.els.wrapper.classList.remove('controls-hidden');
+    }
+    
+    hideControls() {
+        this.state.controlsVisible = false;
+        this.els.wrapper.classList.add('controls-hidden');
+    }
+    
+    startControlsHideTimer() {
+        clearTimeout(this.state.controlsTimeout);
+        if (this.state.activeMenu) return; // Don't hide if menu is open
+        this.state.controlsTimeout = setTimeout(() => {
+            if (this.state.playing) {
+                this.hideControls();
+            }
+        }, 3000);
+    }
+    
+    // Resume functionality
+    checkResume() {
+        const progressRaw = localStorage.getItem(`watch_progress_${this.videoData.id}`);
+        if (progressRaw) {
+            try {
+                const data = JSON.parse(progressRaw);
+                // If less than 95% complete and more than 10s watched
+                if (data.currentTime > 10 && (data.currentTime / data.duration) < 0.95) {
+                    this.showResumePrompt(data.currentTime);
+                }
+            } catch (e) {}
+        }
+    }
+    
+    showResumePrompt(time) {
+        this.els.resumeMeta.textContent = `${formatTime(this.state.duration - time)} remaining from last session`;
+        this.els.resumePrompt.classList.remove('hidden');
+        
+        this.els.resumeBtn.onclick = () => {
+            this.els.video.currentTime = time;
+            this.els.video.play();
+            this.els.resumePrompt.classList.add('hidden');
+        };
+        
+        this.els.startOverBtn.onclick = () => {
+            this.els.video.currentTime = 0;
+            this.els.video.play();
+            this.els.resumePrompt.classList.add('hidden');
+        };
+    }
+    
+    saveProgress() {
+        // Throttle saving to every 5 seconds or so
+        const now = Date.now();
+        if (!this._lastSave || now - this._lastSave > 5000) {
+            const current = this.els.video.currentTime;
+            const dur = this.state.duration;
+            if (dur > 0 && current > 0) {
+                localStorage.setItem(`watch_progress_${this.videoData.id}`, JSON.stringify({
+                    currentTime: current,
+                    duration: dur,
+                    updatedAt: now
+                }));
+                this._lastSave = now;
+            }
+        }
+    }
+    
+    // Menus
+    openMenu(type) {
+        this.state.activeMenu = type;
+        this.showControls();
+        clearTimeout(this.state.controlsTimeout);
+        
+        if (type === 'settings') {
+            this.els.menuTitle.textContent = 'Settings';
+            this.els.menuBackBtn.classList.add('hidden');
+            this.renderSettingsMenu();
+        } else if (type === 'audio') {
+            this.els.menuTitle.textContent = 'Audio';
+            this.els.menuBackBtn.classList.remove('hidden');
+            this.renderAudioMenu();
+        } else if (type === 'captions') {
+            this.els.menuTitle.textContent = 'Subtitles';
+            this.els.menuBackBtn.classList.remove('hidden');
+            this.renderCaptionMenu();
+        } else if (type === 'speed') {
+            this.els.menuTitle.textContent = 'Playback Speed';
+            this.els.menuBackBtn.classList.remove('hidden');
+            this.renderSpeedMenu();
+        }
+
+        if (this.els.menu.classList.contains('hidden')) {
+            // Force browser layout reflow to ensure the transition fires from the initial state
+            void this.els.menu.offsetWidth;
+            this.els.menu.classList.remove('hidden');
+        }
+    }
+    
+    closeMenu() {
+        this.state.activeMenu = null;
+        this.els.menu.classList.add('hidden');
+        if (this.state.playing) this.startControlsHideTimer();
+    }
+    
+    renderSettingsMenu() {
+        let html = `
+            <div class="menu-list">
+                <button class="menu-list-item" onclick="window.playerInstance.openMenu('speed')">
+                    <span>Playback Speed</span>
+                    <span class="menu-value">${this.state.playbackRate}×</span>
+                </button>
+        `;
+        
+        if (this.state.audioTracks.length > 0) {
+            let activeAudio = this.state.audioTracks.find(t => t.id === this.state.selectedAudioTrack);
+            html += `
+                <button class="menu-list-item" onclick="window.playerInstance.openMenu('audio')">
+                    <span>Audio</span>
+                    <span class="menu-value">${activeAudio ? (activeAudio.name || activeAudio.language) : 'Default'}</span>
+                </button>
+            `;
+        }
+        
+        if (this.state.subtitleTracks.length > 0) {
+            let activeSub = this.state.subtitleTracks.find(t => t.id === this.state.selectedSubtitleTrack);
+            let subText = this.state.subtitlesEnabled && activeSub ? (activeSub.name || activeSub.language) : 'Off';
+            html += `
+                <button class="menu-list-item" onclick="window.playerInstance.openMenu('captions')">
+                    <span>Subtitles</span>
+                    <span class="menu-value">${subText}</span>
+                </button>
+            `;
+        }
+        
+        let fitText = this.state.objectFit === 'contain' ? 'Fit' : (this.state.objectFit === 'cover' ? 'Crop' : 'Stretch');
+        html += `
+            <button class="menu-list-item" onclick="window.playerInstance.toggleVideoFit()">
+                <span>Video Fit</span>
+                <span class="menu-value">${fitText}</span>
+            </button>
+        </div>`;
+        this.els.menuContent.innerHTML = html;
+    }
+    
+    renderAudioMenu() {
+        let html = `<div class="menu-list">`;
+        this.state.audioTracks.forEach(track => {
+            const isActive = this.state.selectedAudioTrack === track.id;
+            html += `
+                <button class="menu-list-item ${isActive ? 'active' : ''}" onclick="window.playerInstance.setAudioTrack(${track.id})">
+                    <span class="menu-check">${isActive ? '●' : ''}</span>
+                    <span>${track.name || track.language || `Track ${track.id}`}</span>
+                </button>
+            `;
+        });
+        html += `</div>`;
+        this.els.menuContent.innerHTML = html;
+    }
+    
+    setAudioTrack(id) {
+        if (this.hls) {
+            this.hls.audioTrack = id;
+            this.state.selectedAudioTrack = id;
+            this.openMenu('settings'); // Go back
+        } else if (this.els.video.audioTracks) {
+            for (let i = 0; i < this.els.video.audioTracks.length; i++) {
+                this.els.video.audioTracks[i].enabled = (i === id);
+            }
+            this.state.selectedAudioTrack = id;
+            this.openMenu('settings');
+        }
+    }
+
+    renderCaptionMenu() {
+        let html = `<div class="menu-list">
+            <button class="menu-list-item ${!this.state.subtitlesEnabled ? 'active' : ''}" onclick="window.playerInstance.setCaptionTrack(-1)">
+                <span class="menu-check">${!this.state.subtitlesEnabled ? '●' : ''}</span>
+                <span>Off</span>
+            </button>
+        `;
+        this.state.subtitleTracks.forEach(track => {
+            const isActive = this.state.subtitlesEnabled && this.state.selectedSubtitleTrack === track.id;
+            html += `
+                <button class="menu-list-item ${isActive ? 'active' : ''}" onclick="window.playerInstance.setCaptionTrack('${track.id}')">
+                    <span class="menu-check">${isActive ? '●' : ''}</span>
+                    <span>${track.name || track.language || `Track ${track.id}`}</span>
+                </button>
+            `;
+        });
+        html += `</div>`;
+        this.els.menuContent.innerHTML = html;
+    }
+    
+    setCaptionTrack(id) {
+        if (id === -1) {
+            this.state.subtitlesEnabled = false;
+        } else {
+            this.state.selectedSubtitleTrack = id;
+            this.state.subtitlesEnabled = true;
+        }
+        localStorage.setItem('watch_subtitles', this.state.subtitlesEnabled.toString());
+        this.applySubtitles();
+        this.openMenu('settings');
+    }
+    
+    applySubtitles() {
+        const textTracks = this.els.video.textTracks;
+        for (let i = 0; i < textTracks.length; i++) {
+            const track = textTracks[i];
+            const matchingDataTrack = this.state.subtitleTracks[i];
+            if (this.state.subtitlesEnabled && matchingDataTrack && matchingDataTrack.id === this.state.selectedSubtitleTrack) {
+                track.mode = 'showing';
+            } else {
+                track.mode = 'hidden';
+            }
+        }
+    }
+    
+    toggleCaptions() {
+        this.state.subtitlesEnabled = !this.state.subtitlesEnabled;
+        if (this.state.subtitlesEnabled && this.state.subtitleTracks.length > 0) {
+            if (this.state.selectedSubtitleTrack === -1) {
+                this.state.selectedSubtitleTrack = this.state.subtitleTracks[0].id;
+            }
+        }
+        localStorage.setItem('watch_subtitles', this.state.subtitlesEnabled.toString());
+        this.applySubtitles();
+    }
+    
+    renderSpeedMenu() {
+        const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+        let html = `<div class="menu-list">`;
+        speeds.forEach(speed => {
+            const isActive = this.state.playbackRate === speed;
+            html += `
+                <button class="menu-list-item ${isActive ? 'active' : ''}" onclick="window.playerInstance.setSpeed(${speed})">
+                    <span class="menu-check">${isActive ? '●' : ''}</span>
+                    <span>${speed}×</span>
+                </button>
+            `;
+        });
+        html += `</div>`;
+        this.els.menuContent.innerHTML = html;
+    }
+    
+    setSpeed(speed) {
+        this.els.video.playbackRate = speed;
+        this.state.playbackRate = speed;
+        localStorage.setItem('watch_speed', speed.toString());
+        this.openMenu('settings');
+    }
+
+    toggleVideoFit() {
+        const fits = ['contain', 'cover', 'fill'];
+        let idx = fits.indexOf(this.state.objectFit);
+        idx = (idx + 1) % fits.length;
+        this.state.objectFit = fits[idx];
+        this.els.video.style.objectFit = this.state.objectFit;
+        localStorage.setItem('watch_objectFit', this.state.objectFit);
+        this.renderSettingsMenu(); // Update UI text
+    }
+    
+    destroy() {
+        document.removeEventListener('keydown', this.handleKeydown);
+        if (this.hls) {
+            this.hls.destroy();
+        }
+        delete window.playerInstance;
+    }
+}
+
+
+
+
+const API_URL = 'https://watch-backend.lucidfr.site/api';
+// Production ready fallback: const API_URL = 'https://watch-backend.lucidfr.site/api';
+
+const state = {
+    videos: [],
+    searchResults: [],
+    searchQuery: '',
+    favorites: JSON.parse(localStorage.getItem('watch_favorites')) || [],
+    currentRoute: '/',
+    heroIndex: 0,
+    heroTimer: null
+};
+
+// DOM Elements
+const elements = {
+    app: document.getElementById('app'),
+    navLinks: document.querySelectorAll('.nav-link'),
+    menuOverlay: document.getElementById('menuOverlay'),
+    menuBtn: document.getElementById('menuBtn'),
+    mobileMenuBtn: document.getElementById('mobileMenuBtn'),
+    closeMenuBtn: document.getElementById('closeMenuBtn'),
+    toast: document.getElementById('toast'),
+    refreshBtns: [document.getElementById('refreshBtn'), document.getElementById('menuRefreshBtn')]
+};
+
+// Format Utilities
+const formatDuration = (seconds) => {
+    if (!seconds) return '';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (h > 0) return `${h}H ${m}M`;
+    return `${m}M`;
+};
+
+const formatRes = (w, h) => {
+    if (!w || !h) return '';
+    if (w >= 3800) return '4K';
+    if (w >= 1900) return '1080P';
+    if (w >= 1200) return '720P';
+    return 'SD';
+};
+
+const getThumbnail = (id) => `${API_URL}/videos/${id}/thumbnail`;
+
+// API Calls
+async function fetchVideos(search = '') {
+    try {
+        const res = await fetch(`${API_URL}/videos?limit=100${search ? `&search=${encodeURIComponent(search)}` : ''}`);
+        if (!res.ok) throw new Error('Failed to fetch');
+        return await res.json();
+    } catch (err) {
+        console.error(err);
+        return { items: [] };
+    }
+}
+
+async function fetchVideoDetails(id) {
+    try {
+        const res = await fetch(`${API_URL}/videos/${id}`);
+        if (!res.ok) throw new Error('Failed to fetch video');
+        return await res.json();
+    } catch (err) {
+        console.error(err);
+        return null;
+    }
+}
+
+async function triggerRefresh() {
+    try {
+        showToast('REFRESHING ARCHIVE<br><small>Scanning media...</small>');
+        const res = await fetch(`${API_URL}/refresh`, { method: 'POST' });
+        const data = await res.json();
+        
+        const checkStatus = async () => {
+            const statusRes = await fetch(`${API_URL}/refresh/status`);
+            const statusData = await statusRes.json();
+            if (statusData.status === 'running') {
+                setTimeout(checkStatus, 2000);
+            } else {
+                showToast(`ARCHIVE UPDATED<br><small>Found ${statusData.last_scan?.new || 0} new files.</small>`);
+                init(); // Reload
+            }
+        };
+        checkStatus();
+    } catch (err) {
+        showToast('ERROR<br><small>Could not reach archive.</small>');
+    }
+}
+
+// Router
+function parseRoute() {
+    let hash = window.location.hash || '#/';
+    let route = hash.slice(1).split('?')[0];
+    let params = new URLSearchParams(hash.split('?')[1] || '');
+    return { route, params };
+}
+
+async function navigate() {
+    const { route, params } = parseRoute();
+    state.currentRoute = route;
+    
+    // Update active nav links
+    elements.navLinks.forEach(link => {
+        if (link.dataset.route === route) {
+            link.classList.add('active');
+        } else {
+            link.classList.remove('active');
+        }
+    });
+
+    elements.app.classList.add('navigating');
+    
+    // Wait for fade out
+    await new Promise(r => setTimeout(r, 400));
+    
+    if (state.heroTimer) {
+        clearInterval(state.heroTimer);
+    }
+    
+    // Cleanup old player
+    if (window.playerInstance) {
+        window.playerInstance.destroy();
+    }
+    
+    window.scrollTo(0, 0);
+
+    if (route === '/') {
+        await renderHome();
+    } else if (route === '/library') {
+        await renderLibrary();
+    } else if (route === '/search') {
+        await renderSearch(params.get('q') || '');
+    } else if (route.startsWith('/video/')) {
+        const id = route.split('/')[2];
+        await renderVideoDetail(id);
+    } else if (route === '/stream') {
+        const url = params.get('url');
+        await renderStream(url);
+    } else if (route.startsWith('/watch/')) {
+        const id = route.split('/')[2];
+        await renderWatch(id);
+    } else {
+        await renderHome();
+    }
+
+    elements.app.classList.remove('navigating');
+}
+
+// Views
+async function renderHome() {
+    if (state.videos.length === 0) {
+        const data = await fetchVideos();
+        state.videos = data.items || [];
+    }
+
+    if (state.videos.length === 0) {
+        elements.app.innerHTML = `
+            <div class="empty-state">
+                <h2 class="serif">Archive empty</h2>
+                <p>No cinematic media discovered.</p>
+            </div>
+        `;
+        return;
+    }
+
+    const heroVideos = state.videos.slice(0, 5); // Cycle top 5
+    
+    elements.app.innerHTML = `
+        <div class="hero">
+            <div class="hero-images" id="heroImages">
+                ${heroVideos.map((v, i) => `
+                    <img src="${v.backdrop || v.thumbnail || getThumbnail(v.id)}" class="hero-img ${i === 0 ? 'active' : ''}" data-index="${i}" alt="${v.title}">
+                `).join('')}
+            </div>
+            <div class="hero-content" id="heroContent">
+                <div class="hero-title-container">
+                    ${heroVideos.map((v, i) => `
+                        <div class="hero-title serif ${i === 0 ? 'active' : ''}" data-index="${i}">${v.title}</div>
+                    `).join('')}
+                </div>
+                <div class="hero-meta-container">
+                    ${heroVideos.map((v, i) => {
+                        const meta = [v.year, ...(v.genres || [])].filter(Boolean).join(' · ');
+                        return `<div class="hero-meta ${i === 0 ? 'active' : ''}" data-index="${i}">${meta}</div>`;
+                    }).join('')}
+                </div>
+                <a href="#/watch/${heroVideos[0].id}" class="watch-btn" id="heroWatchBtn">Watch &rarr;</a>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">Recently added</div>
+            <div class="video-grid">
+                ${state.videos.slice(0, 6).map(v => createVideoCard(v)).join('')}
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">From the archive</div>
+            <div class="video-grid">
+                ${state.videos.slice(6, 12).map(v => createVideoCard(v)).join('')}
+            </div>
+        </div>
+    `;
+
+    // Setup hero crossfade
+    if (heroVideos.length > 1) {
+        state.heroIndex = 0;
+        state.heroTimer = setInterval(() => {
+            const nextIndex = (state.heroIndex + 1) % heroVideos.length;
+            
+            // Images
+            document.querySelectorAll('.hero-img').forEach(img => img.classList.remove('active'));
+            document.querySelector(`.hero-img[data-index="${nextIndex}"]`).classList.add('active');
+            
+            // Titles
+            document.querySelectorAll('.hero-title').forEach(title => title.classList.remove('active'));
+            document.querySelector(`.hero-title[data-index="${nextIndex}"]`).classList.add('active');
+            
+            // Meta
+            document.querySelectorAll('.hero-meta').forEach(meta => meta.classList.remove('active'));
+            const nextMeta = document.querySelector(`.hero-meta[data-index="${nextIndex}"]`);
+            if (nextMeta) nextMeta.classList.add('active');
+            
+            // Update button link
+            document.getElementById('heroWatchBtn').href = `#/watch/${heroVideos[nextIndex].id}`;
+            
+            state.heroIndex = nextIndex;
+        }, 6000);
+    }
+}
+
+async function renderLibrary() {
+    if (state.videos.length === 0) {
+        const data = await fetchVideos();
+        state.videos = data.items || [];
+    }
+    
+    elements.app.innerHTML = `
+        <div class="section" style="padding-top: 10rem;">
+            <div class="section-header" style="font-size: 3rem;">The Library</div>
+            <div class="video-grid">
+                ${state.videos.map(v => createVideoCard(v)).join('')}
+            </div>
+        </div>
+    `;
+}
+
+async function renderSearch(initialQuery) {
+    elements.app.innerHTML = `
+        <div class="search-container" style="margin-bottom: 2rem;">
+            <input type="text" id="searchInput" class="search-input" placeholder="Search the library..." value="${initialQuery || ''}" autocomplete="off">
+        </div>
+        
+        <div class="section" style="margin-bottom: 4rem; max-width: 800px; margin-left: auto; margin-right: auto; text-align: center;">
+            <h3 style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem; letter-spacing: 0.1em; text-transform: uppercase;">Or stream directly from URL</h3>
+            <div style="display: flex; gap: 1rem;">
+                <input type="text" id="urlInput" class="search-input" style="font-size: 1.2rem; padding: 1rem;" placeholder="https://..." autocomplete="off">
+                <button id="streamBtn" class="detail-watch-btn" style="border: none; cursor: pointer; white-space: nowrap;">Play URL</button>
+            </div>
+        </div>
+
+        <div class="search-meta" id="searchMeta"></div>
+        <div class="video-grid" id="searchResults"></div>
+    `;
+
+    const input = document.getElementById('searchInput');
+    const resultsContainer = document.getElementById('searchResults');
+    const metaContainer = document.getElementById('searchMeta');
+    
+    document.getElementById('streamBtn').addEventListener('click', () => {
+        const url = document.getElementById('urlInput').value.trim();
+        if (url) {
+            window.location.hash = `/stream?url=${encodeURIComponent(url)}`;
+        }
+    });
+
+    let debounceTimeout;
+
+    const performSearch = async (query) => {
+        if (!query.trim()) {
+            resultsContainer.innerHTML = '';
+            metaContainer.textContent = 'ENTER A TITLE OR FILENAME';
+            return;
+        }
+
+        metaContainer.textContent = 'SEARCHING...';
+        resultsContainer.innerHTML = '';
+        
+        const data = await fetchVideos(query);
+        
+        if (data.items.length === 0) {
+            metaContainer.textContent = 'NOTHING MATCHED';
+            resultsContainer.innerHTML = `
+                <div class="empty-state" style="grid-column: 1/-1;">
+                    <p>Try another title, filename or phrase.</p>
+                </div>
+            `;
+        } else {
+            metaContainer.textContent = `${data.total} RESULT${data.total !== 1 ? 'S' : ''} FOUND`;
+            resultsContainer.innerHTML = data.items.map(v => createVideoCard(v)).join('');
+        }
+    };
+
+    input.addEventListener('input', (e) => {
+        clearTimeout(debounceTimeout);
+        const query = e.target.value;
+        
+        // Update URL without triggering nav
+        const newUrl = `${window.location.pathname}#/search${query ? `?q=${encodeURIComponent(query)}` : ''}`;
+        window.history.replaceState(null, '', newUrl);
+
+        debounceTimeout = setTimeout(() => {
+            performSearch(query);
+        }, 500);
+    });
+
+    if (initialQuery) {
+        performSearch(initialQuery);
+    } else {
+        metaContainer.textContent = 'ENTER A TITLE OR FILENAME';
+    }
+    
+    // Focus on desktop
+    if (window.innerWidth > 768) {
+        setTimeout(() => input.focus(), 500);
+    }
+}
+
+async function renderVideoDetail(id) {
+    const video = await fetchVideoDetails(id);
+    
+    if (!video) {
+        elements.app.innerHTML = `<div class="empty-state"><h2 class="serif">Not found</h2><p>This media could not be located.</p></div>`;
+        return;
+    }
+
+    const isFav = state.favorites.includes(video.id);
+
+    let audioHtml = video.audio_tracks.length ? video.audio_tracks.map(a => `
+        <div class="detail-item">
+            <span class="detail-item-label">${a.title || a.language || 'Unknown'} — ${a.codec}</span>
+            <span class="detail-item-sub">${a.channels ? a.channels + 'ch' : ''} ${a.default ? '· Default' : ''}</span>
+        </div>
+    `).join('') : '<div class="detail-item"><span class="detail-item-sub">No audio tracks detected</span></div>';
+
+    let subHtml = video.subtitle_tracks.length ? video.subtitle_tracks.map(s => `
+        <div class="detail-item">
+            <span class="detail-item-label">${s.title || s.language || 'Unknown'} — ${s.codec}</span>
+            <span class="detail-item-sub">${s.forced ? 'Forced ' : ''}${s.default ? 'Default' : ''}</span>
+        </div>
+    `).join('') : '<div class="detail-item"><span class="detail-item-sub">No subtitles detected</span></div>';
+
+    elements.app.innerHTML = `
+        <div class="detail-hero">
+            <img src="${video.backdrop || video.thumbnail || getThumbnail(video.id)}" alt="${video.title}">
+        </div>
+        
+        <div class="detail-content fade-in">
+            <h1 class="detail-title serif">${video.title}</h1>
+            <div class="detail-meta-row">
+                ${video.year ? `<span>${video.year}</span><span>·</span>` : ''}
+                <span>${formatDuration(video.duration)}</span>
+                ${video.genres && video.genres.length ? `<span>·</span><span>${video.genres.join(' · ').toUpperCase()}</span>` : ''}
+            </div>
+            
+            ${video.description ? `<p style="max-width: 800px; margin-bottom: 4rem; color: var(--text-muted); font-size: 0.85rem; line-height: 1.8;">${video.description}</p>` : ''}
+            
+            <div class="detail-actions">
+                <a href="#/watch/${video.id}" class="detail-watch-btn">Watch &rarr;</a>
+                <button class="detail-fav-btn" id="favBtn" data-id="${video.id}">
+                    ${isFav ? '★ Favorited' : '☆ Add to favorites'}
+                </button>
+            </div>
+            
+            <div class="detail-grid">
+                <div class="detail-col">
+                    <h3>About</h3>
+                    <div class="detail-list">
+                        ${video.director ? `
+                        <div class="detail-item">
+                            <span class="detail-item-label">Director</span>
+                            <span class="detail-item-sub">${video.director}</span>
+                        </div>` : ''}
+                        ${video.rating ? `
+                        <div class="detail-item">
+                            <span class="detail-item-label">TMDB Rating</span>
+                            <span class="detail-item-sub">${video.rating}</span>
+                        </div>` : ''}
+                        ${video.original_language ? `
+                        <div class="detail-item">
+                            <span class="detail-item-label">Language</span>
+                            <span class="detail-item-sub">${video.original_language.toUpperCase()}</span>
+                        </div>` : ''}
+                    </div>
+                </div>
+
+                <div class="detail-col">
+                    <h3>File information</h3>
+                    <div class="detail-list">
+                        <div class="detail-item">
+                            <span class="detail-item-label">File</span>
+                            <span class="detail-item-sub" style="word-break: break-all;">${video.filename}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-item-label">Resolution</span>
+                            <span class="detail-item-sub">${video.video.width} × ${video.video.height}</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-item-label">Video Codec</span>
+                            <span class="detail-item-sub">${video.video.codec.toUpperCase()}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="detail-col">
+                    <h3>Audio tracks</h3>
+                    <div class="detail-list">${audioHtml}</div>
+                </div>
+            </div>
+            
+            ${video.cast ? `
+            <div class="detail-grid" style="border-top: none; padding-top: 0;">
+                <div class="detail-col" style="grid-column: 1/-1;">
+                    <h3>Cast</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 2rem; color: var(--text-muted); font-size: 0.9rem;">
+                        ${(typeof video.cast === 'string' ? JSON.parse(video.cast) : video.cast).map(c => `<div><div style="color: var(--text);">${c.name}</div><div>${c.character}</div></div>`).join('')}
+                    </div>
+                </div>
+            </div>
+            ` : ''}
+            
+            <div class="detail-grid" style="border-top: none; padding-top: 0; margin-bottom: 10rem;">
+                <div class="detail-col">
+                    <h3>Subtitles</h3>
+                    <div class="detail-list">${subHtml}</div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('favBtn').addEventListener('click', (e) => {
+        const btn = e.target;
+        if (state.favorites.includes(video.id)) {
+            state.favorites = state.favorites.filter(id => id !== video.id);
+            btn.innerHTML = '☆ ADD TO FAVORITES';
+        } else {
+            state.favorites.push(video.id);
+            btn.innerHTML = '★ FAVORITED';
+        }
+        localStorage.setItem('watch_favorites', JSON.stringify(state.favorites));
+    });
+}
+
+async function renderStream(url) {
+    if (!url) {
+        elements.app.innerHTML = `<div class="empty-state"><h2 class="serif">No URL</h2><p>Please provide a valid stream URL.</p></div>`;
+        return;
+    }
+    
+    // Create a mock video object to satisfy WatchPlayer
+    const isHls = url.includes('.m3u8');
+    const mockVideo = {
+        id: 'direct-stream',
+        title: url.split('/').pop() || 'Direct Stream',
+        duration: 0,
+        playback_data: {
+            video_id: 'direct-stream',
+            mode: isHls ? 'hls' : 'direct',
+            source: {
+                url: url,
+                type: isHls ? 'application/vnd.apple.mpegurl' : 'video/mp4'
+            },
+            audio_tracks: [],
+            subtitle_tracks: [],
+            chapters: []
+        }
+    };
+
+    elements.app.innerHTML = `
+        <div class="watch-page fade-in">
+            <div class="mobile-only" style="margin-bottom: 40px; padding: 0 20px; position: relative; z-index: 10;">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <a href="javascript:history.back()" style="color: var(--text); text-decoration: none; opacity: 0.8; font-size: 1.5rem;">&larr;</a>
+                    <h1 class="serif" style="margin: 0; font-size: 1.5rem; color: var(--text-muted); word-break: break-all;">${mockVideo.title}</h1>
+                </div>
+            </div>
+            
+            <div id="playerRoot" style="margin-bottom: 20px; width: 100%;"></div>
+            
+            <div class="watch-metadata" style="padding: 0 20px;">
+                <h2 class="serif" style="margin-bottom: 0.5rem; font-size: 2rem; word-break: break-all;">${mockVideo.title}</h2>
+                <div class="detail-item">
+                    <span class="detail-item-label">Source URL</span>
+                    <span class="detail-item-sub" style="word-break: break-all;">${url}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-item-label">Stream Type</span>
+                    <span class="detail-item-sub">${isHls ? 'HLS (Adaptive)' : 'Direct (MP4/MKV)'}</span>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    const root = document.getElementById('playerRoot');
+    
+    // Since we provide playback_data directly in the mock, we need to modify WatchPlayer to accept it if API fetch is bypassed, or we can just mock the API fetch.
+    // Actually, WatchPlayer automatically fetches from `/api/videos/${video.id}/playback`. We need it to NOT do that for custom streams.
+}
+
+async function renderWatch(id) {
+    const video = await fetchVideoDetails(id);
+    if (!video) {
+        elements.app.innerHTML = `<div class="empty-state"><h2 class="serif">Not found</h2><p>This media could not be located.</p></div>`;
+        return;
+    }
+    
+    let audioHtml = video.audio_tracks.length ? video.audio_tracks.map(a => `
+        <div class="detail-item">
+            <span class="detail-item-label">${a.title || a.language || 'Unknown'} — ${a.codec}</span>
+            <span class="detail-item-sub">${a.channels ? a.channels + 'ch' : ''} ${a.default ? '· Default' : ''}</span>
+        </div>
+    `).join('') : '<div class="detail-item"><span class="detail-item-sub">No audio tracks detected</span></div>';
+
+    let subHtml = video.subtitle_tracks.length ? video.subtitle_tracks.map(s => `
+        <div class="detail-item">
+            <span class="detail-item-label">${s.title || s.language || 'Unknown'} — ${s.codec}</span>
+            <span class="detail-item-sub">${s.forced ? 'Forced ' : ''}${s.default ? 'Default' : ''}</span>
+        </div>
+    `).join('') : '<div class="detail-item"><span class="detail-item-sub">No subtitles detected</span></div>';
+
+    elements.app.innerHTML = `
+        <div class="watch-page fade-in">
+            <div class="mobile-only" style="margin-bottom: 40px; padding: 0 20px; position: relative; z-index: 10;">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <a href="javascript:history.back()" style="color: var(--text); text-decoration: none; opacity: 0.8; font-size: 1.5rem;">&larr;</a>
+                    <h1 class="serif" style="margin: 0; font-size: 1.5rem; color: var(--text-muted);">${video.title}</h1>
+                </div>
+            </div>
+            
+            <div id="playerRoot" style="margin-bottom: 20px; width: 100%;"></div>
+            
+            <div class="watch-metadata" style="padding: 0 20px;">
+                <h2 class="serif" style="margin-bottom: 0.5rem; font-size: 2rem;">${video.title}</h2>
+                <div class="detail-meta-row" style="margin-bottom: 2rem;">
+                    ${video.year ? `<span>${video.year}</span><span>·</span>` : ''}
+                    <span>${formatDuration(video.duration)}</span>
+                    ${video.genres && video.genres.length ? `<span>·</span><span>${video.genres.join(' · ').toUpperCase()}</span>` : ''}
+                </div>
+                
+                ${video.description ? `<p style="max-width: 800px; margin-bottom: 4rem; color: var(--text-muted); font-size: 0.85rem; line-height: 1.8;">${video.description}</p>` : ''}
+                
+                <div class="detail-grid">
+                    <div class="detail-col">
+                        <h3>Audio Tracks</h3>
+                        <div class="detail-list">
+                            ${audioHtml}
+                        </div>
+                    </div>
+                    <div class="detail-col">
+                        <h3>Subtitles</h3>
+                        <div class="detail-list">
+                            ${subHtml}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    const root = document.getElementById('playerRoot');
+    new WatchPlayer(root, video, API_URL);
+}
+
+// Components
+function createVideoCard(video) {
+    const dur = formatDuration(video.duration);
+    const meta = [video.year, dur].filter(Boolean).join(' · ');
+    
+    return `
+        <a href="#/video/${video.id}" class="video-card">
+            <div class="video-card-img-wrapper" style="aspect-ratio: 2/3;">
+                <img src="${video.poster || video.thumbnail || getThumbnail(video.id)}" loading="lazy" alt="${video.title}">
+                ${dur ? `<div class="video-duration">${dur}</div>` : ''}
+            </div>
+            <div class="video-card-info">
+                <div class="video-card-title">${video.title}</div>
+                <div class="video-card-meta">${meta}</div>
+            </div>
+        </a>
+    `;
+}
+
+// UI Utilities
+function showToast(html) {
+    elements.toast.innerHTML = html;
+    elements.toast.classList.remove('hidden');
+    setTimeout(() => {
+        elements.toast.classList.add('hidden');
+    }, 4000);
+}
+
+function toggleMenu() {
+    elements.menuOverlay.classList.toggle('hidden');
+}
+
+// Init
+function init() {
+    window.addEventListener('hashchange', navigate);
+    
+    elements.menuBtn.addEventListener('click', toggleMenu);
+    elements.mobileMenuBtn.addEventListener('click', (e) => { e.preventDefault(); toggleMenu(); });
+    elements.closeMenuBtn.addEventListener('click', toggleMenu);
+    
+    // Close menu when clicking a link
+    document.querySelectorAll('.menu-link').forEach(link => {
+        if (link.id !== 'menuRefreshBtn') {
+            link.addEventListener('click', () => elements.menuOverlay.classList.add('hidden'));
+        }
+    });
+
+    elements.refreshBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            elements.menuOverlay.classList.add('hidden');
+            triggerRefresh();
+        });
+    });
+
+    navigate();
+}
+
+init();
+</script>
 </body>
 </html>
