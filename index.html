@@ -4134,7 +4134,7 @@ async function renderSearch(initialQuery) {
     if (initialQuery) {
         performSearch(initialQuery);
     } else {
-        metaContainer.textContent = 'ENTER A TITLE OR FILENAME';
+        metaContainer.textContent = '';
     }
     
     // Focus on desktop
@@ -4322,7 +4322,16 @@ async function renderStream(url) {
     
     // Initialize the player directly with the mock video data (which contains playback_data)
     // This will bypass the API fetch and directly play the URL.
-    new WatchPlayer(root, mockVideo, API_URL);
+    const player = new WatchPlayer(root, mockVideo, API_URL);
+    
+    // Auto-play the custom stream after a small delay
+    setTimeout(() => {
+        if (player.els && player.els.video) {
+            player.els.video.play().catch(e => console.log('Autoplay prevented:', e));
+            player.state.playing = true;
+            player.updatePlayStateUI();
+        }
+    }, 500);
 }
 
 async function renderWatch(id) {
