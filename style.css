@@ -296,7 +296,9 @@ h1, h2, h3, h4, h5, h6, .serif {
     position: absolute;
     bottom: 0;
     left: 0;
-    font-size: 4rem;
+    font-size: 3rem;
+    line-height: 1.2;
+    padding-bottom: 0.1em;
     letter-spacing: -0.02em;
     opacity: 0;
     filter: blur(10px);
