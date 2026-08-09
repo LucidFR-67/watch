@@ -623,7 +623,7 @@ function init() {
         const loader = document.getElementById('loader');
         if (loader) {
             loader.classList.add('finished');
-            setTimeout(() => loader.remove(), 1000);
+            setTimeout(() => loader.remove(), 1600);
         }
     }, 2200);
 

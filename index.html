@@ -860,7 +860,7 @@ h1, h2, h3, h4, h5, h6, .serif {
     display: flex;
     justify-content: center;
     align-items: center;
-    transition: transform 0.8s cubic-bezier(0.77, 0, 0.175, 1);
+    transition: transform 1.5s cubic-bezier(0.65, 0, 0.05, 1);
 }
 
 .loader.finished {
@@ -2318,7 +2318,7 @@ h1, h2, h3, h4, h5, h6, .serif {
     display: flex;
     justify-content: center;
     align-items: center;
-    transition: transform 0.8s cubic-bezier(0.77, 0, 0.175, 1);
+    transition: transform 1.5s cubic-bezier(0.65, 0, 0.05, 1);
 }
 
 .loader.finished {
@@ -4613,7 +4613,7 @@ function init() {
         const loader = document.getElementById('loader');
         if (loader) {
             loader.classList.add('finished');
-            setTimeout(() => loader.remove(), 1000);
+            setTimeout(() => loader.remove(), 1600);
         }
     }, 2200);
 
