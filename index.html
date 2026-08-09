@@ -436,7 +436,16 @@ h1, h2, h3, h4, h5, h6, .serif {
     flex-direction: column;
     gap: 1.5rem;
     cursor: pointer;
-    group: hover;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.02);
+    transition: transform 0.4s cubic-bezier(0.2, 1, 0.3, 1), border-color 0.4s ease, background 0.4s ease;
+}
+
+.video-card:hover {
+    transform: translateY(-6px);
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.04);
 }
 
 .video-card-img-wrapper {
