@@ -734,14 +734,13 @@ h1, h2, h3, h4, h5, h6, .serif {
 
 /* Search Page */
 .search-container {
-    padding: 10rem 2rem 4rem;
+    padding: 6rem 2rem 2rem;
     max-width: 1600px;
     margin: 0 auto;
-    min-height: 100vh;
 }
 
 @media (min-width: 768px) {
-    .search-container { padding: 15rem 5rem 6rem; }
+    .search-container { padding: 8rem 5rem 2rem; }
 }
 
 .search-input {
@@ -751,13 +750,13 @@ h1, h2, h3, h4, h5, h6, .serif {
     border-bottom: 1px solid var(--border);
     color: var(--text);
     font-family: var(--font-serif);
-    font-size: 4rem;
-    padding: 2rem 0;
+    font-size: 2.5rem;
+    padding: 1rem 0;
     transition: border-color 0.4s;
 }
 
 @media (min-width: 768px) {
-    .search-input { font-size: 8rem; }
+    .search-input { font-size: 4rem; }
 }
 
 .search-input:focus {
