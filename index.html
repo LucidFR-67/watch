@@ -4398,7 +4398,6 @@ function createVideoCard(video) {
         <a href="#/video/${video.id}" class="video-card">
             <div class="video-card-img-wrapper" style="aspect-ratio: 2/3;">
                 <img src="${video.poster || video.thumbnail || getThumbnail(video.id)}" loading="lazy" alt="${video.title}">
-                ${dur ? `<div class="video-duration">${dur}</div>` : ''}
             </div>
             <div class="video-card-info">
                 <div class="video-card-title">${video.title}</div>
