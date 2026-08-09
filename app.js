@@ -622,8 +622,11 @@ function init() {
     setTimeout(() => {
         const loader = document.getElementById('loader');
         if (loader) {
-            loader.classList.add('finished');
-            setTimeout(() => loader.remove(), 1600);
+            loader.classList.add('hiding');
+            setTimeout(() => {
+                loader.classList.add('finished');
+                setTimeout(() => loader.remove(), 1600);
+            }, 1000); // Wait for text to hide
         }
     }, 2200);
 
