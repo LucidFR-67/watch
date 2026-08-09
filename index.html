@@ -4070,9 +4070,9 @@ async function renderSearch(initialQuery) {
         
         <div class="section" style="margin-bottom: 4rem; max-width: 800px; margin-left: auto; margin-right: auto; text-align: center;">
             <h3 style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.9rem; letter-spacing: 0.1em; text-transform: uppercase;">Or stream directly from URL</h3>
-            <div style="display: flex; gap: 1rem;">
-                <input type="text" id="urlInput" class="search-input" style="font-size: 1.2rem; padding: 1rem;" placeholder="https://..." autocomplete="off">
-                <button id="streamBtn" class="detail-watch-btn" style="border: none; cursor: pointer; white-space: nowrap;">Play URL</button>
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <input type="text" id="urlInput" class="search-input" style="font-size: 1.2rem; padding: 0.75rem 0;" placeholder="https://..." autocomplete="off">
+                <button id="streamBtn" style="background: var(--text); color: var(--bg); padding: 0.75rem 2rem; border: none; cursor: pointer; white-space: nowrap; font-size: 0.9rem; letter-spacing: 0.1em; text-transform: uppercase; transition: opacity 0.2s;">Play URL</button>
             </div>
         </div>
 
@@ -4096,7 +4096,7 @@ async function renderSearch(initialQuery) {
     const performSearch = async (query) => {
         if (!query.trim()) {
             resultsContainer.innerHTML = '';
-            metaContainer.textContent = 'ENTER A TITLE OR FILENAME';
+            metaContainer.textContent = '';
             return;
         }
 
